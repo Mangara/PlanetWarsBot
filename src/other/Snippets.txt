@@ -1,0 +1,394 @@
+================================================================================
+============= Some supply code that didn't work as well as I hoped =============
+================================================================================
+
+    private static void supply(DuelPlanetWars pw, Prediction2[] predictions) {
+        Set<Planet> frontier = findFrontier(pw, predictions);
+
+        supplyClosest(pw, predictions, frontier);
+    }
+
+    private static void supplyClosest(DuelPlanetWars pw, Prediction2[] predictions, Set<Planet> frontier) {
+        // Each non-frontier planet sends its surplus to the closest frontier planet
+        for (Planet p : pw.getMyPlanets()) {
+            if (!frontier.contains(p)) {
+                int minDist = Integer.MAX_VALUE;
+                Planet closest = null;
+
+                for (Planet f : frontier) {
+                    int dist = pw.getDistance(p, f);
+
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closest = f;
+                    }
+                }
+
+                if (closest != null) {
+                    int shipsToSend = predictions[p.getPlanetID()].getSurplusAt(0);
+
+                    if (shipsToSend > 0) {
+                        pw.issueOrder(p, closest, shipsToSend);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void supplyGreedyMinCostFlow(DuelPlanetWars pw, Prediction2[] predictions, Set<Planet> frontier) {
+        // Add all edges between non-frontier and frontier planets to a list, to figure out the best way to supply each frontier planet
+        // Also compute the available or required supply for each planet
+        List<Pair<Integer, Pair<Planet, Planet>>> supplyEdges = new ArrayList<Pair<Integer, Pair<Planet, Planet>>>((pw.getMyPlanets().size() - frontier.size()) * frontier.size());
+        int[] capacity = new int[pw.getPlanets().size()];
+        int totalSupply = 0;
+        int totalEnemyTroops = 0;
+
+        for (Planet p : pw.getMyPlanets()) {
+            if (frontier.contains(p)) {
+                // Figure out how many troops this frontier planet needs to defend against
+                int enemyTroops = 0;
+                int enemies = 0;
+
+                for (Planet e : pw.getClosestPlanets(p)) {
+                    if (e.getOwner() == 2) {
+                        enemyTroops += e.getNumShips();
+                        enemies++;
+
+                        // Only consider the 3 closest enemy planets
+                        if (enemies == 3) {
+                            break;
+                        }
+                    }
+                }
+
+                capacity[p.getPlanetID()] = enemyTroops - p.getNumShips();
+                totalEnemyTroops += enemyTroops - p.getNumShips();
+            } else {
+                // See how many troops we can send
+                int surplus = predictions[p.getPlanetID()].getSurplusAt(0);
+                capacity[p.getPlanetID()] = surplus;
+                totalSupply += surplus;
+
+                for (Planet f : frontier) {
+                    supplyEdges.add(new Pair<Integer, Pair<Planet, Planet>>(pw.getDistance(p, f), new Pair<Planet, Planet>(p, f)));
+                }
+            }
+        }
+
+        // Divide the available supply among the frontier proportional to the number of close enemy troops
+        double remainder = 0;
+
+        for (Planet f : frontier) {
+            double fraction = totalSupply * capacity[f.getPlanetID()] / (double) totalEnemyTroops;
+            int supply = (int) Math.floor(fraction);
+
+            remainder += fraction - supply;
+
+            if (remainder > 1) {
+                supply++;
+                remainder--;
+            }
+
+            capacity[f.getPlanetID()] = supply;
+        }
+
+        // Sort all edges by length
+        Collections.sort(supplyEdges, new Comparator<Pair<Integer, Pair<Planet, Planet>>>() {
+
+            public int compare(Pair<Integer, Pair<Planet, Planet>> e1, Pair<Integer, Pair<Planet, Planet>> e2) {
+                if (e1.getFirst() < e2.getFirst()) {
+                    return -1;
+                }
+                if (e1.getFirst() > e2.getFirst()) {
+                    return 1;
+                }
+                return 0;
+            }
+        });
+
+        // Add the edges greedily
+        for (Pair<Integer, Pair<Planet, Planet>> edge : supplyEdges) {
+            Planet p = edge.getSecond().getFirst();
+            Planet f = edge.getSecond().getSecond();
+
+            int shipsToSend = Math.min(capacity[p.getPlanetID()], capacity[f.getPlanetID()]);
+
+            if (shipsToSend > 0) {
+                pw.issueOrder(p, f, shipsToSend);
+                capacity[p.getPlanetID()] -= shipsToSend;
+                capacity[f.getPlanetID()] -= shipsToSend;
+            }
+        }
+    }
+
+    /**
+     * Determines which planets make up the frontier, but doesn't send any ships yet.
+     * @param pw
+     * @param predictions
+     * @return
+     */
+    private static Set<Planet> findFrontier(DuelPlanetWars pw, Prediction2[] predictions) {
+        // All planets that don't have other planets that are closer to them than the nearest enemy planet are automatically in the frontier
+        Set<Planet> frontier = new HashSet<Planet>(pw.getNumPlanets());
+
+        for (Planet mine : pw.getMyPlanets()) {
+            int closestAlly = -1;
+
+            for (Planet planet : pw.getClosestPlanets(mine)) {
+                int dist = pw.getDistance(mine, planet);
+
+                if (closestAlly > -1) {
+                    if (dist > closestAlly) {
+                        // This planet has an ally that is strictly closer than the closest enemy planet; it is not necessarily in the frontier
+                        break;
+                    }
+                } else {
+                    if (planet.getOwner() == 1) {
+                        closestAlly = dist;
+                    }
+                }
+
+                if (planet.getOwner() == 2) {
+                    // There is no strictly closer allied planet (else we would have left the loop before): this planet is on the frontier
+                    if (DEBUG_SUPPLY) {
+                        log.println(mine + " added to intial frontier.");
+                    }
+                    frontier.add(mine);
+                    break;
+                }
+            }
+        }
+
+        // Greedy frontier selection. Makes sure that every non-frontier planet has a frontier planet that is closer than the closest enemy planet.
+        // For every non-frontier planet:
+        // 1. If there is a frontier planet that is closer than any enemy planet, we're good
+        // 2. Otherwise, add the allied planet closest to the closest enemy planet that is still closer to me to the frontier
+        // 3. If there is no such planet, I am a frontier planet
+        for (Planet planet : pw.getMyPlanets()) {
+            if (!frontier.contains(planet)) {
+                Planet closestEnemy = null;
+                int closestEnemyDist = -1;
+
+                for (Planet p : pw.getClosestPlanets(planet)) {
+                    if (frontier.contains(p)) { // && predictions[p.getPlanetID()].getOwnerAt(pw.getDistance(p, planet)) == 1 ?
+                        break;
+                    } else if (p.getOwner() == 2) {
+                        closestEnemy = p;
+                        closestEnemyDist = pw.getDistance(p, planet);
+                        break;
+                    }
+                }
+
+                if (closestEnemy != null) {
+                    // We encountered an enemy planet before finding a suitable frontier planet to send ships to.
+                    // Find the allied planet closest to the enemy planet that is still closer to me and add it to the frontier.
+                    int minDistToEnemy = closestEnemyDist;
+                    Planet supplyTarget = planet;
+
+                    for (Planet p : pw.getClosestPlanets(planet)) {
+                        if (pw.getDistance(p, planet) >= closestEnemyDist) {
+                            // We've seen all possible candidates, use the best.
+                            if (DEBUG_SUPPLY) {
+                                log.println(supplyTarget + " added to the frontier to defend " + planet);
+                            }
+                            frontier.add(supplyTarget);
+                            break;
+                        }
+
+                        if (p.getOwner() == 1) { // && predictions[p.getPlanetID()].getOwnerAt(pw.getDistance(p, planet)) == 1 ?
+                            // This planet is a possible supply target and it's closer to me than the closest enemy, only thing left is to compare distance to the enemy
+                            int dist = pw.getDistance(p, closestEnemy);
+
+                            if (dist < minDistToEnemy) {
+                                minDistToEnemy = dist;
+                                supplyTarget = p;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return frontier;
+    }
+
+================================================================================
+== Code that computes the total number of ships needed to defend against all incoming attacks ==
+================================================================================
+
+    /**
+     * Returns a pair, consisting of the turn after the last turn that the planet is in our hands and the number of ships required to defend it against all incoming attacks. If there is no such turn, this method returns null.
+     * @return
+     */
+    public Pair<Integer, Integer> getLastHostileTakeOver() {
+        if (!valid) {
+            throw new IllegalStateException("Predictions are currently invalid");
+        }
+
+        if (points.get(points.size() - 1).owner != 2) {
+            // There is no last hostile take-over: we own the planet at the end of the prediction
+            return null;
+        }
+
+        ListIterator<DataPoint> it = points.listIterator(points.size() - 1);
+        DataPoint afterTakeOver = null;
+        int index = points.size();
+
+        while (it.hasPrevious()) {
+            DataPoint d = it.previous();
+            index--;
+
+            if (d.owner == 0) {
+                // This planet wasn't taken from us, it was neutral before
+                return null;
+            }
+
+            if (d.owner == 1) {
+                it.next(); // returns d
+                afterTakeOver = it.next();
+                break;
+            }
+        }
+
+        if (afterTakeOver == null) {
+            // This planet was never ours
+            return null;
+        } else {
+            // Compute the number of ships required to keep this planet from falling into enemy hands
+            int shipsRequired = afterTakeOver.numShips;
+
+            if (shipsRequired > 0) {
+                addIncomingFleet(1, shipsRequired, afterTakeOver.turn, true);
+            }
+
+            while (points.get(points.size() - 1).owner != 1) {
+                if (MyBot.DEBUG_DEFENSE) {
+                    MyBot.log.println("Checking... " + index + " points: " + points + " takeOverTurn: " + afterTakeOver.turn + " shReq: " + shipsRequired);
+                }
+
+                for (int i = index + 1; i < points.size(); i++) {
+                    DataPoint d = points.get(i);
+
+                    if (d.owner == 2) {
+                        index = i;
+                        shipsRequired += d.numShips;
+                        addIncomingFleet(1, d.numShips, afterTakeOver.turn, true);
+                        break;
+                    }
+                }
+            }
+
+            if (shipsRequired > 0) {
+                removeIncomingFleet(1, shipsRequired, afterTakeOver.turn, true);
+            }
+
+            return new Pair<Integer, Integer>(afterTakeOver.turn, shipsRequired);
+        }
+    }
+
+================================================================================
+=============== Code for picking pitstops for the supply routes ================
+================================================================================
+
+HashSet<Planet> frontier;
+
+// Construct frontier
+
+for (Planet planet : pw.getMyPlanets()) {
+  if (!frontier.contains(planet)) {
+    // Find the closest frontier planet
+    Planet supplyTarget = null;
+
+    for (Planet p : pw.getClosestPlanets(planet)) {
+      if (frontier.contains(p)) {
+        supplyTarget = p;
+        break;
+      }
+    }
+
+    assert supplyTarget != null; // This only happens if the frontier is empty, which should never be the case
+
+    // See if there are intermediate planets we can route through without it costing too much time
+    int supplyDist = pw.getDistance(planet, supplyTarget);
+    int maxDist = (int) Math.ceil(1.2 * supplyDist);
+    int bestScore = Integer.MAX_VALUE;
+    Planet bestRelay = null;
+
+    for (Planet p : pw.getClosestPlanets(planet)) {
+      int dist = pw.getDistance(p, supplyTarget);
+
+      if (dist < supplyDist) {
+        // This is a potential intermediate stop, check if we don't make too large a detour
+        int distToP = pw.getDistance(planet, p);
+
+        if (dist + distToP <= maxDist) {
+          int score = dist * dist + distToP * distToP; // TODO: fine-tune the score?
+
+          if (score < bestScore) {
+            bestScore = score;
+            bestRelay = p;
+          }
+        }
+      }
+
+      if (p == supplyTarget) {
+        // We have seen all closer planets
+        break;
+      }
+    }
+
+    assert bestRelay != null; // supplyTarget is a valid candidate, so this shouldn't occur
+
+    // Send stuff to the best relay
+  }
+}
+
+================================================================================
+= Code for computing how many additional ships we need to send to not get sniped =
+================================================================================
+
+// NOTE: this code is not entirely correct, because the defending planets might be taking part in the attack as well
+
+int takeOverTurn; // The turn my ships will arrive at the planet
+
+if (predictions[target.getPlanetId()].getOwnerAt(takeOverTurn) == 0) {
+  // I'm attacking a neutral. I don't want to be sniped. How can the enemy snipe me?
+  // He can send forces from any planet that is at most the same distance as the number of turns this attack takes.
+  // I should expect that many ships the turn after I take the planet.
+
+  int snipeForce = 0;
+  int defenders = 0;
+  int nextDefenders = 0;
+  int prevDistance = 0;
+  int additionalShipsNeeded = 0;
+
+  for (Planet sniper : pw.getClosestPlanets(target)) {
+    int dist = pw.getDistance(target, sniper);
+
+    if (dist > takeOverTurn) {
+      break;
+    }
+
+    if (dist != prevDistance) {
+      // Handle the aggregated forces so far
+      additionalShipsNeeded = Math.max(additionalShipsNeeded, snipeForce - defenders);
+
+      prevDistance = dist;
+      defenders = nextDefenders;
+      nextDefenders = 0;
+    }
+
+    if (predictions[sniper.getPlanetId()].getOwnerAt(takeOverTurn - dist + 1) == 2) {
+      // This is an enemy planet that could snipe this target
+      snipeForce += predictions[sniper.getPlanetId()].getNumShipsAt(takeOverTurn - dist + 1);
+    }
+
+    if (dist < takeOverTurn && predictions[sniper.getPlanetId()].getOwnerAt(takeOverTurn - dist + 2) == 1) {
+      // This planet can help defend against snipes from planets that are further away
+      nextDefenders += predictions[sniper.getPlanetId()].getSurplusAt(takeOverTurn - dist + 2);
+    }
+  }
+
+  // We need additionalShipsNeeded more ships to ensure that we don't lose the planet to a snipe
+}
+

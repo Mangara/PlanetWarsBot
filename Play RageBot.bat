@@ -1,0 +1,1 @@
+java -jar tools/PlayGame-1.2.jar maps/map1.txt 1000 1000 log.txt "java -jar dist/PlanetWarsBot.jar" "java -jar example_bots/RageBot.jar" | java -jar tools/ShowGame-1.2.jar

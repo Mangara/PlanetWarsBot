@@ -1,0 +1,35 @@
+TODO:
+
+Defense:
+- Detect snipe / countersnipe patterns (equidistant planets) and defend against that
+
+Offense:
+- Don't attack targets accross the map that only have to stop sending out ships to defend
+- Do a more advanced analysis for the first turn: branch and bound each set of possible neutrals, to take into account additional reinforcements from nearby neutrals for the defensive force on my home planet
+- Better target evaluation ?
+- Be more careful with this kind of snipes? http://ai-contest.com/visualizer.php?game_id=7398246
+- Also consider enemy fleets in transit when determining surplus: see if I can defend after 4 turns
+- What's going wrong here? http://ai-contest.com/visualizer.php?game_id=7482094
+- Increase the look-ahead? Use a dynamic look-ahead?
+
+Supply:
+- Use tactical value to determine which frontier planet to supply.
+- Pick a better frontier ?
+- Distribute ships over my frontier better with min-cost flow ? (current approximation doesn't work really well: update the distribution function ?)
+
+General:
+- Simulate enemy supply routes / streaming attacks  (partly done, streams are detected, but not yet taken into account for predictions)
+- Why this? http://ai-contest.com/visualizer.php?game_id=8381513
+
+DONE:
+
+- 3: Defend against all incoming waves separately
+- 3: Route supply through intermediate planets to decrease time required to adjust to changes in frontier
+- 3: Defend better against snipes. Tentatively done, now determines how many ships are needed to defend against snipes and adds this to the attack.
+
+- 4: Pre-supply attack targets
+- 4: Defend better against snipes and be more careful when attacking neutral planets. Especially those that are in-between me and my enemy. -- Done by adding the number of ships needed to defend against snipes to the required attack force.
+- 4: Throw planets that I'm going to lose anyway out of my frontier so I stop supplying them with ships -- Done by building frontier using predictions at end of game.
+- 4: Consider more snipe opportunities in the early game -- Done by also considering attacks against planets with closer enemies when playing defensively, but adding the number of ships needed to defend against snipes to the required attack force.
+
+- 5: Incorporate tactical value of planets: target's average nearby growth is multiplied in the attack score
